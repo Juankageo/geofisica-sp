@@ -187,6 +187,11 @@
             updateUI();
         }
     }
+    if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js')
+    .then(() => console.log("Modo Offline Activado"))
+    .catch(err => console.log("Error en Offline", err));
+}
 </script>
 
 </body>
