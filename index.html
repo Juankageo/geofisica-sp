@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Geofísica Pro SP - Android</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root { --primary: #2c3e50; --accent: #e67e22; --success: #27ae60; --danger: #e74c3c; --bg: #f4f7f6; }
+        body { font-family: sans-serif; margin: 0; padding: 10px; background: var(--bg); color: #333; }
+        .container { max-width: 100%; margin: auto; background: white; padding: 15px; border-radius: 10px; shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        
+        h1 { font-size: 1.4em; text-align: center; color: var(--primary); margin-bottom: 5px; }
+        .status-bar { font-size: 0.8em; text-align: center; margin-bottom: 15px; color: #666; }
+
+        /* Estilo de Inputs para Dedos */
+        .grid-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px; }
+        label { font-size: 0.85em; font-weight: bold; display: block; margin-bottom: 5px; }
+        input { width: 90%; padding: 12px; border: 2px solid #ddd; border-radius: 8px; font-size: 1em; }
+        input:focus { border-color: var(--accent); outline: none; }
+
+        /* Botones Grandes para Campo */
+        .btn { width: 100%; padding: 15px; border: none; border-radius: 8px; font-weight: bold; color: white; font-size: 1em; margin-bottom: 10px; touch-action: manipulation; }
+        .btn-add { background: var(--success); font-size: 1.2em; }
+        .btn-export { background: #3498db; }
+        .btn-danger { background: var(--danger); padding: 8px; font-size: 0.8em; }
+
+        .chart-container { height: 250px; margin: 20px 0; border: 1px solid #eee; }
+        
+        table { width: 100%; border-collapse: collapse; font-size: 0.85em; margin-top: 10px; }
+        th { background: var(--primary); color: white; padding: 8px; }
+        td { border-bottom: 1px solid #ddd; padding: 8px; text-align: center; }
+        .neg { color: var(--danger); font-weight: bold; }
+        .pos { color: var(--success); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>Registrador SP Mobile</h1>
+    <p class="status-bar" id="gps-status">📍 GPS: Esperando señal...</p>
+
+    <div style="background: #fff3cd; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #ffeeba;">
+        <label>Offset Electrodos (mV):</label>
+        <input type="number" id="offset" value="0.00" step="0.01">
+    </div>
+
+    <div class="grid-inputs">
+        <div>
+            <label>Distancia (m)</label>
+            <input type="number" id="dist" placeholder="Ej: 10">
+        </div>
+        <div>
+            <label>Lectura (mV)</label>
+            <input type="number" id="val" placeholder="0.00">
+        </div>
+    </div>
+
+    <button class="btn btn-add" onclick="getLocation()">✚ REGISTRAR ESTACIÓN</button>
+
+    <div class="chart-container">
+        <canvas id="mainChart"></canvas>
+    </div>
+
+    <div style="display: flex; gap: 10px;">
+        <button class="btn btn-export" onclick="exportCSV()">⬇ EXPORTAR CSV</button>
+        <button class="btn btn-danger" onclick="clearData()">Limpiar Todo</button>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>Dist(m)</th>
+                <th>Corr(mV)</th>
+                <th>📍 GPS</th>
+            </tr>
+        </thead>
+        <tbody id="dataTable"></tbody>
+    </table>
+</div>
+
+<script>
+    let rawData = [];
+    let myChart;
+
+    // Cargar datos al iniciar
+    window.onload = () => {
+        const saved = localStorage.getItem('sp_geofisica_data');
+        if (saved) {
+            rawData = JSON.parse(saved);
+            updateUI();
+        }
+        startGpsTracking();
+    };
+
+    function startGpsTracking() {
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition(
+                (pos) => document.getElementById('gps-status').innerText = `📍 GPS Activo: ±${pos.coords.accuracy.toFixed(1)}m`,
+                () => document.getElementById('gps-status').innerText = "📍 GPS: Sin acceso",
+                { enableHighAccuracy: true }
+            );
+        }
+    }
+
+    function getLocation() {
+        const d = parseFloat(document.getElementById('dist').value);
+        const v = parseFloat(document.getElementById('val').value);
+        if (isNaN(d) || isNaN(v)) return alert("Faltan datos");
+
+        navigator.geolocation.getCurrentPosition(
+            (pos) => saveData(d, v, pos.coords.latitude, pos.coords.longitude),
+            () => {
+                if(confirm("No hay GPS. ¿Guardar sin coordenadas?")) saveData(d, v, 0, 0);
+            },
+            { enableHighAccuracy: true }
+        );
+    }
+
+    function saveData(d, v, lat, lon) {
+        const offset = parseFloat(document.getElementById('offset').value) || 0;
+        const corregido = v - offset;
+
+        rawData.push({ dist: d, original: v, corr: corregido, lat: lat, lon: lon });
+        rawData.sort((a, b) => a.dist - b.dist);
+        
+        localStorage.setItem('sp_geofisica_data', JSON.stringify(rawData));
+        
+        updateUI();
+        document.getElementById('val').value = '';
+        document.getElementById('dist').focus();
+    }
+
+    function updateUI() {
+        const table = document.getElementById('dataTable');
+        table.innerHTML = '';
+        const labels = [], values = [];
+
+        rawData.forEach((item) => {
+            const cl = item.corr < 0 ? 'neg' : 'pos';
+            table.innerHTML += `<tr>
+                <td>${item.dist} m</td>
+                <td class="${cl}">${item.corr.toFixed(2)}</td>
+                <td style="font-size:0.7em">${item.lat.toFixed(4)}, ${item.lon.toFixed(4)}</td>
+            </tr>`;
+            labels.push(item.dist);
+            values.push(item.corr);
+        });
+        renderChart(labels, values);
+    }
+
+    function renderChart(labels, values) {
+        const ctx = document.getElementById('mainChart').getContext('2d');
+        if (myChart) myChart.destroy();
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Perfil SP (mV)',
+                    data: values,
+                    borderColor: '#2c3e50',
+                    backgroundColor: 'rgba(44, 62, 80, 0.1)',
+                    fill: true,
+                    tension: 0.3
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false }
+        });
+    }
+
+    function exportCSV() {
+        if (rawData.length === 0) return;
+        let csv = "Distancia_m,Original_mV,Corregido_mV,Latitud,Longitud\n";
+        rawData.forEach(r => csv += `${r.dist},${r.original},${r.corr},${r.lat},${r.lon}\n`);
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `SP_DATA_${new Date().getTime()}.csv`;
+        a.click();
+    }
+
+    function clearData() {
+        if(confirm("¿Borrar todos los datos del día?")) {
+            rawData = [];
+            localStorage.removeItem('sp_geofisica_data');
+            updateUI();
+        }
+    }
+</script>
+
+</body>
+</html>
